@@ -83,6 +83,11 @@ class Channel(TelegramBaseModel):
             else f"{start.strftime(date_template)} - "
         )
 
+    def set_from_full_telegram_object(self, telegram_object):
+        self.participants_count = telegram_object.full_chat.participants_count or 0
+        self.about = telegram_object.full_chat.about or ""
+        self.telegram_location = telegram_object.full_chat.location or ""
+
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
         self.in_degree = (

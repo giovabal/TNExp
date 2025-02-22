@@ -22,6 +22,7 @@ class TelegramCrawler:
 
     def __init__(self, client):
         self.client = client
+        self.client.start()
         self.last_call = timezone.now() - timedelta(seconds=self.wait_time)
 
     def wait(self):
@@ -40,18 +41,16 @@ class TelegramCrawler:
 
     def get_basic_channel(self, seed):
         self.wait()
-        telegram_channel = None
-
-        async def _do():
-            try:
-                telegram_channel = await self.client.get_entity(seed)
-                return (await sync_to_async(Channel.from_telegram_object)(telegram_channel, force_update=True), telegram_channel) if telegram_channel else (None, None)
-            except errors.rpcerrorlist.ChannelPrivateError:
-                print("Seed non disponibile: ", seed)
-                return None, None
-
-        self.client.loop.run_until_complete(_do())
-
+        try:
+            telegram_channel = self.client.get_entity(seed)
+            return (
+                (Channel.from_telegram_object(telegram_channel, force_update=True), telegram_channel)
+                if telegram_channel
+                else (None, None)
+            )
+        except errors.rpcerrorlist.ChannelPrivateError:
+            print("Seed non disponibile: ", seed)
+            return None, None
 
     def get_channel(self, seed):
         channel, telegram_channel = self.get_basic_channel(seed)
@@ -204,9 +203,7 @@ class TelegramCrawler:
             for channel in result.chats:
                 if hasattr(channel, "id"):
                     results_count += 1
-                    already_exists = await sync_to_async(
-                        Channel.objects.filter(telegram_id=channel.id).exists
-                    )()
+                    already_exists = await sync_to_async(Channel.objects.filter(telegram_id=channel.id).exists)()
                     if not already_exists:
                         await sync_to_async(Channel.from_telegram_object)(channel, force_update=True)
             return results_count

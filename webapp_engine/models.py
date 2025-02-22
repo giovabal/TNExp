@@ -30,13 +30,26 @@ class TelegramBaseModel(BaseModel):
             **cls._args_for_from_telegram_object(telegram_object), defaults=defaults or {}
         )
         if (created or force_update) and cls.TELEGRAM_OBJECT_PROPERTIES:
-            for field in cls.TELEGRAM_OBJECT_PROPERTIES:
-                if hasattr(obj, field) and hasattr(telegram_object, field):
-                    setattr(obj, field, getattr(telegram_object, field))
-
+            obj.set_from_telegram_object(telegram_object)
             obj.save()
 
         return obj
+
+    @classmethod
+    async def afrom_telegram_object(cls, telegram_object, force_update=True, defaults=None):
+        obj, created = await cls.objects.aget_or_create(
+            **cls._args_for_from_telegram_object(telegram_object), defaults=defaults or {}
+        )
+        if (created or force_update) and cls.TELEGRAM_OBJECT_PROPERTIES:
+            obj.set_from_telegram_object(telegram_object)
+            await obj.asave()
+
+        return obj
+
+    def set_from_telegram_object(self, telegram_object):
+        for field in self.TELEGRAM_OBJECT_PROPERTIES:
+            if hasattr(self, field) and hasattr(telegram_object, field):
+                setattr(self, field, getattr(telegram_object, field))
 
 
 class TelegramBasePictureModel(TelegramBaseModel):
