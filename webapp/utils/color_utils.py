@@ -41,7 +41,13 @@ def parse_color(value):
             return tuple(int(part) for part in parsed[:3])
 
         if "," in cleaned:
-            return tuple(int(part.strip()) for part in cleaned.split(","))
+            parts = [part.strip() for part in cleaned.split(",") if part.strip()]
+            parsed = [float(part) for part in parts[:3]]
+            if not parsed:
+                return DEFAULT_FALLBACK_COLOR
+            if max(parsed) <= 1:
+                return tuple(int(part * 255) for part in parsed[:3])
+            return tuple(int(part) for part in parsed[:3])
 
         if " " in cleaned:
             parts = [part for part in cleaned.split(" ") if part]
@@ -87,15 +93,39 @@ def palette_colors(name):
         raise ValueError(f"Palette '{name}' could not be loaded.")
 
     colors = None
-    for attr in ("hex_colors", "hex", "palette", "colors"):
-        if hasattr(palette, attr):
-            colors = getattr(palette, attr)
+    for attr in ("colors", "hex_colors", "palette", "hex"):
+        if not hasattr(palette, attr):
+            continue
+        candidate = getattr(palette, attr)
+        if callable(candidate):
+            try:
+                candidate = candidate()
+            except TypeError:
+                continue
+
+        if isinstance(candidate, str):
+            if attr == "hex":
+                continue
+            candidate = [candidate]
+
+        try:
+            candidate_list = list(candidate)
+        except TypeError:
+            continue
+
+        if candidate_list:
+            colors = candidate_list
             break
 
     if colors is None:
-        colors = palette
-    if not isinstance(colors, (list, tuple)):
-        colors = list(colors)
+        if isinstance(palette, str):
+            colors = [palette]
+        else:
+            try:
+                colors = list(palette)
+            except TypeError as error:
+                raise ValueError(f"Palette '{name}' has no iterable colors.") from error
+
     return colors
 
 
