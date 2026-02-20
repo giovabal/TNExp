@@ -9,129 +9,21 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db.models import Q
 
 from webapp.models import Channel, Organization
-from webapp_engine.utils import hex_to_rgb, rgb_avg, rgb_to_hex
+from webapp.utils.color_utils import (
+    DEFAULT_FALLBACK_COLOR,
+    colors_for_groups,
+    muted_edge_color,
+    palette_colors,
+    parse_color,
+    rgb_to_csv,
+)
+from webapp_engine.utils import hex_to_rgb, rgb_to_hex
 
 import networkx as nx
-import pypalettes
 from infomap import Infomap
 from pyforceatlas2 import ForceAtlas2
 
-DEFAULT_FALLBACK_COLOR = (204, 204, 204)
 COMMUNITY_ALGORITHMS = {"LOUVAIN", "KCORE", "INFOMAP"}
-
-
-def parse_color(value):
-    if hasattr(value, "hex"):
-        return parse_color(value.hex)
-    if hasattr(value, "hex_code"):
-        return parse_color(value.hex_code)
-    if hasattr(value, "rgb"):
-        return parse_color(value.rgb)
-    if hasattr(value, "rgba"):
-        return parse_color(value.rgba)
-
-    if isinstance(value, dict):
-        rgb_keys = (("r", "g", "b"), ("red", "green", "blue"))
-        for keys in rgb_keys:
-            if all(key in value for key in keys):
-                return parse_color([value[key] for key in keys])
-
-    if isinstance(value, (list, tuple)):
-        values = [float(part) for part in value[:3]]
-        if values and max(values) <= 1:
-            return tuple(int(part * 255) for part in values)
-        return tuple(int(part) for part in values)
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if cleaned.lower().startswith("rgb"):
-            channel_values = cleaned[cleaned.find("(") + 1 : cleaned.rfind(")")].split(",")
-            parsed = [float(part.strip()) for part in channel_values if part.strip()]
-            if not parsed:
-                return DEFAULT_FALLBACK_COLOR
-            if parsed and max(parsed) <= 1:
-                return tuple(int(part * 255) for part in parsed[:3])
-            return tuple(int(part) for part in parsed[:3])
-        if "," in cleaned:
-            return tuple(int(part.strip()) for part in cleaned.split(","))
-        if " " in cleaned:
-            parts = [part for part in cleaned.split(" ") if part]
-            if len(parts) >= 3 and all(part.replace(".", "", 1).isdigit() for part in parts[:3]):
-                parsed = [float(part) for part in parts[:3]]
-                if parsed and max(parsed) <= 1:
-                    return tuple(int(part * 255) for part in parsed[:3])
-                return tuple(int(part) for part in parsed[:3])
-        if cleaned.lower().startswith("0x"):
-            cleaned = cleaned[2:]
-        if cleaned.startswith("#"):
-            cleaned = cleaned[1:]
-
-        # Accept alpha-enabled hex values from palettes (e.g. RRGGBBAA / RGBBAA style).
-        if len(cleaned) in {8, 4} and all(char in "0123456789abcdefABCDEF" for char in cleaned):
-            cleaned = cleaned[:-2] if len(cleaned) == 8 else cleaned[:-1]
-
-        try:
-            return hex_to_rgb(cleaned)
-        except ValueError:
-            return DEFAULT_FALLBACK_COLOR
-
-    if hasattr(value, "__iter__"):
-        try:
-            return parse_color(list(value))
-        except TypeError:
-            return DEFAULT_FALLBACK_COLOR
-    return DEFAULT_FALLBACK_COLOR
-
-
-def palette_colors(name):
-    palette = None
-    if hasattr(pypalettes, "load_palette"):
-        palette = pypalettes.load_palette(name)
-    elif hasattr(pypalettes, "get_palette"):
-        palette = pypalettes.get_palette(name)
-    elif hasattr(pypalettes, "Palette"):
-        palette = pypalettes.Palette(name)
-    if palette is None:
-        raise ValueError(f"Palette '{name}' could not be loaded.")
-
-    colors = None
-    for attr in ("hex_colors", "hex", "palette", "colors"):
-        if hasattr(palette, attr):
-            colors = getattr(palette, attr)
-            break
-    if colors is None:
-        colors = palette
-    if not isinstance(colors, (list, tuple)):
-        colors = list(colors)
-    return colors
-
-
-def expand_colors(colors, count):
-    if not colors:
-        return []
-    if len(colors) >= count:
-        return list(colors[:count])
-    repeats = (count + len(colors) - 1) // len(colors)
-    return (list(colors) * repeats)[:count]
-
-
-def colors_for_groups(group_keys):
-    palette_values = palette_colors(settings.COMMUNITIES_PALETTE)
-    palette_values = expand_colors(palette_values, len(group_keys))
-    return {
-        group_key: ",".join(str(value) for value in parse_color(palette_color))
-        for group_key, palette_color in zip(group_keys, palette_values, strict=False)
-    }
-
-
-def average_color(colors):
-    if not colors:
-        return DEFAULT_FALLBACK_COLOR
-    totals = [0, 0, 0]
-    for color in colors:
-        for index, value in enumerate(parse_color(color)):
-            totals[index] += value
-    count = len(colors)
-    return tuple(int(total / count) for total in totals)
 
 
 def validate_community_palette():
@@ -175,22 +67,11 @@ def build_edge_list(channel_dict):
                 / message_count
             )
             if weight > 0:
-                color = rgb_avg(
-                    parse_color(
-                        source_data["data"]["color"]
-                        if source_data["channel"].organization
-                        else settings.DEAD_LEAVES_COLOR
-                    ),
-                    parse_color(
-                        target_data["data"]["color"]
-                        if target_data["channel"].organization
-                        else settings.DEAD_LEAVES_COLOR
-                    ),
+                color = muted_edge_color(
+                    source_data["data"]["color"] if source_data["channel"].organization else settings.DEAD_LEAVES_COLOR,
+                    target_data["data"]["color"] if target_data["channel"].organization else settings.DEAD_LEAVES_COLOR,
                 )
-                color = [str(int(c * 0.75)) for c in color]
-                edge_list.append(
-                    [str(target_data["channel"].pk), str(source_data["channel"].pk), weight, ",".join(color)]
-                )
+                edge_list.append([str(target_data["channel"].pk), str(source_data["channel"].pk), weight, color])
     return edge_list
 
 
@@ -281,7 +162,7 @@ def build_community_palette(community_map):
 
     total = max(community_map.values())
     group_keys = [str(index) for index in range(1, total + 1)]
-    palette_map = colors_for_groups(group_keys)
+    palette_map = colors_for_groups(group_keys, settings.COMMUNITIES_PALETTE)
     for index in range(1, total + 1):
         palette_color = palette_map.get(str(index))
         community_palette[index] = parse_color(palette_color) if palette_color else DEFAULT_FALLBACK_COLOR
@@ -332,22 +213,20 @@ def apply_palette_colors(graph, channel_dict, edge_list, community_map, communit
                 community_color = community_palette.get(int(group_key))
             if community_color is None:
                 community_color = DEFAULT_FALLBACK_COLOR
-            rgb_color = ",".join(str(value) for value in community_color)
+            rgb_color = rgb_to_csv(community_color)
             node_data["color"] = rgb_color
             channel_dict[node_id]["data"]["color"] = rgb_color
     else:
         for node_id, channel_data in channel_dict.items():
             organization = channel_data["channel"].organization
             color = organization.color if organization else settings.DEAD_LEAVES_COLOR
-            rgb_color = ",".join(str(value) for value in hex_to_rgb(color))
+            rgb_color = rgb_to_csv(hex_to_rgb(color))
             graph.nodes[node_id]["data"]["color"] = rgb_color
             channel_dict[node_id]["data"]["color"] = rgb_color
     for edge in edge_list:
         source_color = channel_dict[edge[0]]["data"]["color"]
         target_color = channel_dict[edge[1]]["data"]["color"]
-        color = rgb_avg(parse_color(source_color), parse_color(target_color))
-        color = [str(int(c * 0.75)) for c in color]
-        graph.edges[edge[0], edge[1]]["color"] = ",".join(color)
+        graph.edges[edge[0], edge[1]]["color"] = muted_edge_color(source_color, target_color)
     return {}
 
 
