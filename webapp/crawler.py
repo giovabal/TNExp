@@ -2,6 +2,7 @@ import glob
 import logging
 import os
 from datetime import timedelta
+from pathlib import Path
 from time import sleep
 
 from django.conf import settings
@@ -23,10 +24,11 @@ class TelegramCrawler:
     messages_limit_per_channel = settings.TELEGRAM_CRAWLER_MESSAGES_LIMIT_PER_CHANNEL
     skippable_references = ["joinchat"]
 
-    def __init__(self, client):
+    def __init__(self, client, temp_download_dir=None):
         self.client = client
         self.last_call = timezone.now() - timedelta(seconds=self.wait_time)
         self.reference_resolution_paused_until = None
+        self.temp_download_dir = Path(temp_download_dir) if temp_download_dir else None
 
     def wait(self):
         w = self.wait_time - (timezone.now() - self.last_call).seconds
@@ -208,7 +210,7 @@ class TelegramCrawler:
             if picture_exists:
                 continue
 
-            picture_filename = self.client.download_media(telegram_picture)
+            picture_filename = self.client.download_media(telegram_picture, file=self.temp_download_dir)
             ProfilePicture.from_telegram_object(
                 telegram_picture,
                 force_update=True,
@@ -227,7 +229,7 @@ class TelegramCrawler:
             return 0
 
         try:
-            picture_filename = self.client.download_media(telegram_message)
+            picture_filename = self.client.download_media(telegram_message, file=self.temp_download_dir)
             MessagePicture.from_telegram_object(
                 telegram_message.media.photo,
                 force_update=True,
@@ -261,7 +263,7 @@ class TelegramCrawler:
             return
 
         try:
-            video_filename = self.client.download_media(telegram_message)
+            video_filename = self.client.download_media(telegram_message, file=self.temp_download_dir)
             MessageVideo.from_telegram_object(
                 document,
                 force_update=True,

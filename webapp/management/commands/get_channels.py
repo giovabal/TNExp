@@ -1,3 +1,6 @@
+import shutil
+from pathlib import Path
+
 from django.conf import settings
 
 from webapp.crawler import TelegramCrawler
@@ -26,7 +29,12 @@ class Command(AsyncBaseCommand):
         with TelegramClient("anon", settings.TELEGRAM_API_ID, settings.TELEGRAM_API_HASH).start(
             phone=settings.TELEGRAM_PHONE_NUMBER
         ) as client:
-            crawler = TelegramCrawler(client)
+            temp_download_dir = Path(settings.BASE_DIR) / "tmp" / "get_channels_media"
+            if temp_download_dir.exists():
+                shutil.rmtree(temp_download_dir)
+            temp_download_dir.mkdir(parents=True, exist_ok=True)
+
+            crawler = TelegramCrawler(client, temp_download_dir=temp_download_dir)
 
             channels = Channel.objects.filter(organization__is_interesting=True).order_by("-id")
             total_channels = channels.count()
@@ -48,24 +56,27 @@ class Command(AsyncBaseCommand):
                 self.stdout.flush()
                 last_line_length = len(line)
 
-            for index, channel in enumerate(channels.iterator(chunk_size=10), start=1):
-                try:
-                    crawler.get_channel(
-                        channel.telegram_id,
-                        fix_holes=fix_holes,
-                        status_callback=lambda message, idx=index: print_status(message, idx),
-                    )
-                except errors.FloodWaitError as error:
-                    self.stdout.write("", ending="\n")
-                    self.stdout.write(
-                        self.style.WARNING(
-                            f"Skipping channel {channel.telegram_id} due to flood wait while resolving references: {error}"
+            try:
+                for index, channel in enumerate(channels.iterator(chunk_size=10), start=1):
+                    try:
+                        crawler.get_channel(
+                            channel.telegram_id,
+                            fix_holes=fix_holes,
+                            status_callback=lambda message, idx=index: print_status(message, idx),
                         )
-                    )
-                    continue
+                    except errors.FloodWaitError as error:
+                        self.stdout.write("", ending="\n")
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f"Skipping channel {channel.telegram_id} due to flood wait while resolving references: {error}"
+                            )
+                        )
+                        continue
 
-            self.stdout.write("", ending="\n")
-            crawler.clean_leftovers()
+                self.stdout.write("", ending="\n")
+                crawler.clean_leftovers()
+            finally:
+                shutil.rmtree(temp_download_dir, ignore_errors=True)
 
         for c in Channel.objects.filter(organization__is_interesting=False):
             c.save()
